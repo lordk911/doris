@@ -18,6 +18,7 @@
 #include "io/hdfs_builder.h"
 
 #include <fmt/format.h>
+#include <thrift/protocol/TDebugProtocol.h>
 
 #include <fstream>
 
@@ -26,6 +27,7 @@
 #include "util/string_util.h"
 #include "util/uid_util.h"
 #include "util/url_coding.h"
+
 namespace doris {
 
 Status HDFSCommonBuilder::init_hdfs_builder() {
@@ -36,6 +38,7 @@ Status HDFSCommonBuilder::init_hdfs_builder() {
         return Status::InternalError(
                 "failed to init HDFSCommonBuilder, please check be/conf/hdfs-site.xml and be.out");
     }
+    hdfsBuilderSetForceNewInstance(hdfs_builder);
     return Status::OK();
 }
 
@@ -44,9 +47,17 @@ Status HDFSCommonBuilder::run_kinit() {
         return Status::InvalidArgument("Invalid hdfs_kerberos_principal or hdfs_kerberos_keytab");
     }
     std::string ticket_path = TICKET_CACHE_PATH + generate_uuid_string();
+    const char* krb_home = getenv("KRB_HOME");
+    std::string krb_home_str(krb_home ? krb_home : "");
     fmt::memory_buffer kinit_command;
-    fmt::format_to(kinit_command, "kinit -c {} -R -t {} -k {}", ticket_path, hdfs_kerberos_keytab,
-                   hdfs_kerberos_principal);
+    if (krb_home_str.empty()) {
+        fmt::format_to(kinit_command, "kinit -c {} -R -t {} -k {}", ticket_path,
+                       hdfs_kerberos_keytab, hdfs_kerberos_principal);
+    } else {
+        // Assign kerberos home in env, get kinit in kerberos home
+        fmt::format_to(kinit_command, krb_home_str + "/bin/kinit -c {} -R -t {} -k {}", ticket_path,
+                       hdfs_kerberos_keytab, hdfs_kerberos_principal);
+    }
     VLOG_NOTICE << "kinit command: " << fmt::to_string(kinit_command);
     std::string msg;
     AgentUtils util;
@@ -54,7 +65,12 @@ Status HDFSCommonBuilder::run_kinit() {
     if (!rc) {
         return Status::InternalError("Kinit failed, errMsg: " + msg);
     }
-    hdfsBuilderSetKerbTicketCachePath(hdfs_builder, ticket_path.c_str());
+#ifdef USE_LIBHDFS3
+    hdfsBuilderSetPrincipal(hdfs_builder, hdfs_kerberos_principal.c_str());
+#endif
+    hdfsBuilderConfSetStr(hdfs_builder, "hadoop.security.kerberos.ticket.cache.path",
+                          ticket_path.c_str());
+    LOG(INFO) << "finish to run kinit: " << fmt::to_string(kinit_command);
     return Status::OK();
 }
 
@@ -97,24 +113,37 @@ Status createHDFSBuilder(const THdfsParams& hdfsParams, HDFSCommonBuilder* build
     if (hdfsParams.__isset.hdfs_kerberos_principal) {
         builder->need_kinit = true;
         builder->hdfs_kerberos_principal = hdfsParams.hdfs_kerberos_principal;
-        hdfsBuilderSetPrincipal(builder->get(), hdfsParams.hdfs_kerberos_principal.c_str());
+        hdfsBuilderSetUserName(builder->get(), hdfsParams.hdfs_kerberos_principal.c_str());
+    } else if (hdfsParams.__isset.user) {
+        hdfsBuilderSetUserName(builder->get(), hdfsParams.user.c_str());
+#ifdef USE_HADOOP_HDFS
+        hdfsBuilderSetKerb5Conf(builder->get(), nullptr);
+        hdfsBuilderSetKeyTabFile(builder->get(), nullptr);
+#endif
     }
     if (hdfsParams.__isset.hdfs_kerberos_keytab) {
         builder->need_kinit = true;
         builder->hdfs_kerberos_keytab = hdfsParams.hdfs_kerberos_keytab;
+#ifdef USE_HADOOP_HDFS
+        hdfsBuilderSetKeyTabFile(builder->get(), hdfsParams.hdfs_kerberos_keytab.c_str());
+#endif
     }
     // set other conf
     if (hdfsParams.__isset.hdfs_conf) {
         for (const THdfsConf& conf : hdfsParams.hdfs_conf) {
             hdfsBuilderConfSetStr(builder->get(), conf.key.c_str(), conf.value.c_str());
+#ifdef USE_HADOOP_HDFS
+            // Set krb5.conf, we should define java.security.krb5.conf in catalog properties
+            if (strcmp(conf.key.c_str(), "java.security.krb5.conf") == 0) {
+                hdfsBuilderSetKerb5Conf(builder->get(), conf.value.c_str());
+            }
+#endif
         }
     }
 
+    hdfsBuilderConfSetStr(builder->get(), "ipc.client.fallback-to-simple-auth-allowed", "true");
     if (builder->is_need_kinit()) {
         RETURN_IF_ERROR(builder->run_kinit());
-    } else if (hdfsParams.__isset.user) {
-        // set hdfs user
-        hdfsBuilderSetUserName(builder->get(), hdfsParams.user.c_str());
     }
 
     return Status::OK();

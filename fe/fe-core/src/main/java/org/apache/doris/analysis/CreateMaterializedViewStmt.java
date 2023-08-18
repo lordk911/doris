@@ -105,6 +105,10 @@ public class CreateMaterializedViewStmt extends DdlStmt {
         this.isReplay = isReplay;
     }
 
+    public boolean isReplay() {
+        return isReplay;
+    }
+
     public String getMVName() {
         return mvName;
     }
@@ -244,6 +248,10 @@ public class CreateMaterializedViewStmt extends DdlStmt {
             throw new AnalysisException("The materialized view only support one table in from clause.");
         }
         TableName tableName = tableRefList.get(0).getName();
+        if (tableName == null) {
+            throw new AnalysisException("table in from clause is invalid, please check if it's single table "
+                    + "and not sub-query");
+        }
         baseIndexName = tableName.getTbl();
         dbName = tableName.getDb();
     }

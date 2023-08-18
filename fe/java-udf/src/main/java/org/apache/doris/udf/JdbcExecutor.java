@@ -72,6 +72,11 @@ public class JdbcExecutor {
     private int curBlockRows = 0;
     private static final byte[] emptyBytes = new byte[0];
     private DruidDataSource druidDataSource = null;
+    private int minPoolSize;
+    private int maxPoolSize;
+    private int minIdleSize;
+    private int maxIdelTime;
+    private int maxWaitTime;
 
     public JdbcExecutor(byte[] thriftParams) throws Exception {
         TJdbcExecutorCtorParams request = new TJdbcExecutorCtorParams();
@@ -81,6 +86,16 @@ public class JdbcExecutor {
         } catch (TException e) {
             throw new InternalException(e.getMessage());
         }
+        minPoolSize = Integer.valueOf(System.getProperty("JDBC_MIN_POOL", "1"));
+        maxPoolSize = Integer.valueOf(System.getProperty("JDBC_MAX_POOL", "100"));
+        maxIdelTime = Integer.valueOf(System.getProperty("JDBC_MAX_IDEL_TIME", "300000"));
+        maxWaitTime = Integer.valueOf(System.getProperty("JDBC_MAX_WAIT_TIME", "5000"));
+        minIdleSize = minPoolSize > 0 ? 1 : 0;
+        LOG.info("JdbcExecutor set minPoolSize = " + minPoolSize
+                + ", maxPoolSize = " + maxPoolSize
+                + ", maxIdelTime = " + maxIdelTime
+                + ", minIdleSize = " + minIdleSize
+                + ", maxWaitTime = " + maxWaitTime);
         init(request.driver_path, request.statement, request.batch_size, request.jdbc_driver_class,
                 request.jdbc_url, request.jdbc_user, request.jdbc_password, request.op, request.table_type);
     }
@@ -94,6 +109,12 @@ public class JdbcExecutor {
         }
         if (conn != null) {
             conn.close();
+        }
+        if (minIdleSize == 0) {
+            // it can be immediately closed if there is no need to maintain the cache of datasource
+            druidDataSource.close();
+            JdbcDataSource.getDataSource().getSourcesMap().clear();
+            druidDataSource = null;
         }
         resultSet = null;
         stmt = null;
@@ -255,16 +276,19 @@ public class JdbcExecutor {
                 ds.setUrl(jdbcUrl);
                 ds.setUsername(jdbcUser);
                 ds.setPassword(jdbcPassword);
-                ds.setMinIdle(1);
-                ds.setInitialSize(1);
-                ds.setMaxActive(100);
-                ds.setMaxWait(5000);
-                ds.setTimeBetweenEvictionRunsMillis(600000);
-                ds.setMinEvictableIdleTimeMillis(300000);
+                ds.setMinIdle(minIdleSize);
+                ds.setInitialSize(minPoolSize);
+                ds.setMaxActive(maxPoolSize);
+                ds.setMaxWait(maxWaitTime);
+                ds.setTestWhileIdle(true);
+                ds.setTestOnBorrow(false);
+                setValidationQuery(ds, tableType);
+                ds.setTimeBetweenEvictionRunsMillis(maxIdelTime / 5);
+                ds.setMinEvictableIdleTimeMillis(maxIdelTime);
                 druidDataSource = ds;
                 // here is a cache of datasource, which using the string(jdbcUrl + jdbcUser +
                 // jdbcPassword) as key.
-                // and the datasource init = 1, min = 1, max = 100, if one of connection idle
+                // and the default datasource init = 1, min = 1, max = 100, if one of connection idle
                 // time greater than 10 minutes. then connection will be retrieved.
                 JdbcDataSource.getDataSource().putSource(jdbcUrl, ds);
             }
@@ -291,9 +315,18 @@ public class JdbcExecutor {
         }
     }
 
-    public void copyBatchBooleanResult(Object columnObj, boolean isNullable, int numRows, long nullMapAddr,
-            long columnAddr) {
-        Object[] column = (Object[]) columnObj;
+    private void setValidationQuery(DruidDataSource ds, TOdbcTableType tableType) {
+        if (tableType == TOdbcTableType.ORACLE) {
+            ds.setValidationQuery("SELECT 1 FROM dual");
+        } else if (tableType == TOdbcTableType.SAP_HANA) {
+            ds.setValidationQuery("SELECT 1 FROM DUMMY");
+        } else {
+            ds.setValidationQuery("SELECT 1");
+        }
+    }
+
+    public void booleanPutToByte(Object[] column, boolean isNullable, int numRows, long nullMapAddr, long columnAddr,
+            int startRow) {
         if (isNullable) {
             for (int i = 0; i < numRows; i++) {
                 if (column[i] == null) {
@@ -306,6 +339,25 @@ public class JdbcExecutor {
             for (int i = 0; i < numRows; i++) {
                 UdfUtils.UNSAFE.putByte(columnAddr + i, (Boolean) column[i] ? (byte) 1 : 0);
             }
+        }
+    }
+
+    public void copyBatchBooleanResult(Object columnObj, boolean isNullable, int numRows, long nullMapAddr,
+            long columnAddr) {
+        Object[] column = (Object[]) columnObj;
+        int firstNotNullIndex = 0;
+        if (isNullable) {
+            firstNotNullIndex = getFirstNotNullObject(column, numRows, nullMapAddr);
+        }
+        if (firstNotNullIndex == numRows) {
+            return;
+        }
+        if (column[firstNotNullIndex] instanceof Boolean) {
+            booleanPutToByte(column, isNullable, numRows, nullMapAddr, columnAddr, firstNotNullIndex);
+        } else if (column[firstNotNullIndex] instanceof Integer) {
+            integerPutToByte(column, isNullable, numRows, nullMapAddr, columnAddr, firstNotNullIndex);
+        } else if (column[firstNotNullIndex] instanceof Byte) {
+            bytePutToByte(column, isNullable, numRows, nullMapAddr, columnAddr, firstNotNullIndex);
         }
     }
 
@@ -646,7 +698,7 @@ public class JdbcExecutor {
 
     private void bigIntegerPutToByte(Object[] column, boolean isNullable, int numRows, long nullMapAddr,
             long columnAddr, int startRowForNullable) {
-        if (isNullable == true) {
+        if (isNullable) {
             for (int i = startRowForNullable; i < numRows; i++) {
                 if (column[i] == null) {
                     UdfUtils.UNSAFE.putByte(nullMapAddr + i, (byte) 1);
@@ -679,19 +731,49 @@ public class JdbcExecutor {
         }
     }
 
-    private void clickHouseUInt64ToLong(Object[] column, boolean isNullable, int numRows, long nullMapAddr,
+    private void stringPutToBigInteger(Object[] column, boolean isNullable, int numRows, long nullMapAddr,
+            long columnAddr, int startRowForNullable) {
+        BigInteger[] data = new BigInteger[numRows];
+        for (int i = 0; i < numRows; i++) {
+            if (column[i] == null) {
+                data[i] = null;
+                UdfUtils.UNSAFE.putByte(nullMapAddr + i, (byte) 1);
+            } else {
+                data[i] = new BigInteger((String) column[i]);
+            }
+        }
+        copyBatchDecimalResult(data, isNullable, numRows, columnAddr, 16, startRowForNullable);
+    }
+
+    private void clickHouseUInt64ToByte(Object[] column, boolean isNullable, int numRows, long nullMapAddr,
             long columnAddr, int startRowForNullable) {
         if (isNullable) {
             for (int i = startRowForNullable; i < numRows; i++) {
                 if (column[i] == null) {
                     UdfUtils.UNSAFE.putByte(nullMapAddr + i, (byte) 1);
                 } else {
-                    UdfUtils.UNSAFE.putLong(columnAddr + (i * 16L), ((UnsignedLong) column[i]).longValue());
+                    UnsignedLong columnValue = (UnsignedLong) column[i];
+                    BigInteger bigIntValue = columnValue.bigIntegerValue();
+                    byte[] bytes = UdfUtils.convertByteOrder(bigIntValue.toByteArray());
+                    byte[] value = new byte[16];
+                    if (bigIntValue.signum() == -1) {
+                        Arrays.fill(value, (byte) -1);
+                    }
+                    System.arraycopy(bytes, 0, value, 0, Math.min(bytes.length, value.length));
+                    UdfUtils.copyMemory(value, UdfUtils.BYTE_ARRAY_OFFSET, null, columnAddr + (i * 16L), 16);
                 }
             }
         } else {
             for (int i = 0; i < numRows; i++) {
-                UdfUtils.UNSAFE.putLong(columnAddr + (i * 16L), ((UnsignedLong) column[i]).longValue());
+                UnsignedLong columnValue = (UnsignedLong) column[i];
+                BigInteger bigIntValue = columnValue.bigIntegerValue();
+                byte[] bytes = UdfUtils.convertByteOrder(bigIntValue.toByteArray());
+                byte[] value = new byte[16];
+                if (bigIntValue.signum() == -1) {
+                    Arrays.fill(value, (byte) -1);
+                }
+                System.arraycopy(bytes, 0, value, 0, Math.min(bytes.length, value.length));
+                UdfUtils.copyMemory(value, UdfUtils.BYTE_ARRAY_OFFSET, null, columnAddr + (i * 16L), 16);
             }
         }
     }
@@ -710,8 +792,10 @@ public class JdbcExecutor {
             bigDecimalPutToBigInteger(column, isNullable, numRows, nullMapAddr, columnAddr, firstNotNullIndex);
         } else if (column[firstNotNullIndex] instanceof BigInteger) {
             bigIntegerPutToByte(column, isNullable, numRows, nullMapAddr, columnAddr, firstNotNullIndex);
+        } else if (column[firstNotNullIndex] instanceof String) {
+            stringPutToBigInteger(column, isNullable, numRows, nullMapAddr, columnAddr, firstNotNullIndex);
         } else if (column[firstNotNullIndex] instanceof com.clickhouse.data.value.UnsignedLong) {
-            clickHouseUInt64ToLong(column, isNullable, numRows, nullMapAddr, columnAddr, firstNotNullIndex);
+            clickHouseUInt64ToByte(column, isNullable, numRows, nullMapAddr, columnAddr, firstNotNullIndex);
         }
     }
 

@@ -69,6 +69,7 @@ public class JdbcResource extends Resource {
     public static final String JDBC_CLICKHOUSE = "jdbc:clickhouse";
     public static final String JDBC_SAP_HANA = "jdbc:sap";
     public static final String JDBC_TRINO = "jdbc:trino";
+    public static final String JDBC_PRESTO = "jdbc:presto";
 
     public static final String MYSQL = "MYSQL";
     public static final String POSTGRESQL = "POSTGRESQL";
@@ -77,6 +78,7 @@ public class JdbcResource extends Resource {
     public static final String CLICKHOUSE = "CLICKHOUSE";
     public static final String SAP_HANA = "SAP_HANA";
     public static final String TRINO = "TRINO";
+    public static final String PRESTO = "PRESTO";
 
     public static final String JDBC_PROPERTIES_PREFIX = "jdbc.";
     public static final String JDBC_URL = "jdbc_url";
@@ -267,6 +269,8 @@ public class JdbcResource extends Resource {
             return SAP_HANA;
         } else if (url.startsWith(JDBC_TRINO)) {
             return TRINO;
+        } else if (url.startsWith(JDBC_PRESTO)) {
+            return PRESTO;
         }
         throw new DdlException("Unsupported jdbc database type, please check jdbcUrl: " + url);
     }
@@ -279,10 +283,13 @@ public class JdbcResource extends Resource {
             // `yearIsDateType` is a parameter of JDBC, and the default is true.
             // We force the use of `yearIsDateType=false`
             newJdbcUrl = checkAndSetJdbcBoolParam(newJdbcUrl, "yearIsDateType", "true", "false");
-            // `tinyInt1isBit` is a parameter of JDBC, and the default is true.
-            // We force the use of `tinyInt1isBit=false`, so that for mysql type tinyint,
-            // it will convert to Doris tinyint, not bit.
+            // MySQL Types and Return Values for GetColumnTypeName and GetColumnClassName
+            // are presented in https://dev.mysql.com/doc/connector-j/8.0/en/connector-j-reference-type-conversions.html
+            // However when tinyInt1isBit=false, GetColumnClassName of MySQL returns java.lang.Boolean,
+            // while that of Doris returns java.lang.Integer. In order to be compatible with both MySQL and Doris,
+            // Jdbc params should set tinyInt1isBit=true&transformedBitIsBoolean=true
             newJdbcUrl = checkAndSetJdbcBoolParam(newJdbcUrl, "tinyInt1isBit", "true", "false");
+            newJdbcUrl = checkAndSetJdbcBoolParam(newJdbcUrl, "transformedBitIsBoolean", "true", "true");
             // set useUnicode and characterEncoding to false and utf-8
             newJdbcUrl = checkAndSetJdbcBoolParam(newJdbcUrl, "useUnicode", "false", "true");
             newJdbcUrl = checkAndSetJdbcParam(newJdbcUrl, "characterEncoding", "utf-8");

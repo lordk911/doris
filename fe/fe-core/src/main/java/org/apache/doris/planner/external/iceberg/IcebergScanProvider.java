@@ -117,20 +117,23 @@ public class IcebergScanProvider extends QueryScanProvider {
     public TFileType getLocationType() throws DdlException, MetaNotFoundException {
         String location = icebergSource.getIcebergTable().location();
         if (location != null && !location.isEmpty()) {
-            if (location.startsWith(FeConstants.FS_PREFIX_S3)
-                    || location.startsWith(FeConstants.FS_PREFIX_S3A)
-                    || location.startsWith(FeConstants.FS_PREFIX_S3N)
-                    || location.startsWith(FeConstants.FS_PREFIX_BOS)
-                    || location.startsWith(FeConstants.FS_PREFIX_COS)
-                    || location.startsWith(FeConstants.FS_PREFIX_OSS)
-                    || location.startsWith(FeConstants.FS_PREFIX_OBS)) {
-                return TFileType.FILE_S3;
-            } else if (location.startsWith(FeConstants.FS_PREFIX_HDFS)) {
+            if (location.startsWith(FeConstants.FS_PREFIX_HDFS)
+                || location.startsWith(FeConstants.FS_PREFIX_COSN)) {
                 return TFileType.FILE_HDFS;
+            } else if (location.startsWith(FeConstants.FS_PREFIX_S3)
+                || location.startsWith(FeConstants.FS_PREFIX_S3A)
+                || location.startsWith(FeConstants.FS_PREFIX_S3N)
+                || location.startsWith(FeConstants.FS_PREFIX_BOS)
+                || location.startsWith(FeConstants.FS_PREFIX_COS)
+                || location.startsWith(FeConstants.FS_PREFIX_OSS)
+                || location.startsWith(FeConstants.FS_PREFIX_OBS)) {
+                return TFileType.FILE_S3;
             } else if (location.startsWith(FeConstants.FS_PREFIX_FILE)) {
                 return TFileType.FILE_LOCAL;
             } else if (location.startsWith(FeConstants.FS_PREFIX_OFS)) {
                 return TFileType.FILE_BROKER;
+            } else if (location.startsWith(FeConstants.FS_PREFIX_GFS)) {
+                return TFileType.FILE_HDFS;
             } else if (location.startsWith(FeConstants.FS_PREFIX_JFS)) {
                 return TFileType.FILE_BROKER;
             }
@@ -173,7 +176,7 @@ public class IcebergScanProvider extends QueryScanProvider {
             for (FileScanTask splitTask : task.split(128 * 1024 * 1024)) {
                 String dataFilePath = splitTask.file().path().toString();
                 IcebergSplit split = new IcebergSplit(new Path(dataFilePath), splitTask.start(),
-                        splitTask.length(), new String[0]);
+                        splitTask.length(), task.file().fileSizeInBytes(), new String[0]);
                 split.setFormatVersion(formatVersion);
                 if (formatVersion >= MIN_DELETE_FILE_SUPPORT_VERSION) {
                     split.setDeleteFileFilters(getDeleteFileFilters(splitTask));

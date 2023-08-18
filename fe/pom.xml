@@ -218,9 +218,12 @@ under the License.
         <metrics-core.version>4.0.2</metrics-core.version>
         <netty-all.version>4.1.89.Final</netty-all.version>
         <objenesis.version>2.1</objenesis.version>
-        <grpc.version>1.39.0</grpc.version>
+        <grpc.version>1.30.0</grpc.version>
         <check.freamework.version>3.32.0</check.freamework.version>
         <protobuf.version>3.21.12</protobuf.version>
+        <!-- we use protoc-jar-maven-plugin to generate protobuf generated code -->
+        <!-- see https://repo.maven.apache.org/maven2/com/google/protobuf/protoc/ to get correct version -->
+        <protoc.artifact.version>3.21.9</protoc.artifact.version>
         <protoparser.version>3.1.5</protoparser.version>
         <snappy-java.version>1.1.7.2</snappy-java.version>
         <automaton.version>1.11-8</automaton.version>
@@ -253,7 +256,7 @@ under the License.
         <avro.version>1.11.1</avro.version>
         <!-- hudi -->
         <hudi.version>0.10.0</hudi.version>
-        <parquet.version>1.10.1</parquet.version>
+        <parquet.version>1.13.0</parquet.version>
         <commons-collections.version>3.2.2</commons-collections.version>
         <commons-compress.version>1.22</commons-compress.version>
         <hibernate.validator.version>8.0.0.Final</hibernate.validator.version>
@@ -268,14 +271,14 @@ under the License.
         <aws-java-sdk.version>1.12.302</aws-java-sdk.version>
         <mariadb-java-client.version>3.0.4</mariadb-java-client.version>
         <dlf-metastore-client-hive.version>0.2.14</dlf-metastore-client-hive.version>
-        <hadoop.version>3.3.4</hadoop.version>
+        <hadoop.version>3.3.5</hadoop.version>
         <joda.version>2.8.1</joda.version>
         <project.scm.id>github</project.scm.id>
         <!--Spring boot 3.X requires at least JDK17-->
         <spring.version>2.7.9</spring.version>
         <zookeeper.version>3.4.14</zookeeper.version>
         <ojdbc8.version>12.2.0.1</ojdbc8.version>
-        <doris.shade.version>1.0.1-SNAPSHOT</doris.shade.version>
+        <doris.shade.version>1.0.2-SNAPSHOT</doris.shade.version>
     </properties>
     <profiles>
         <!-- for custom internal repository -->
@@ -974,6 +977,17 @@ under the License.
                     <exclusion>
                         <artifactId>servlet-api</artifactId>
                         <groupId>javax.servlet</groupId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.hadoop</groupId>
+                <artifactId>hadoop-mapreduce-client-core</artifactId>
+                <version>${hadoop.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>com.google.inject.extensions</groupId>
+                        <artifactId>guice-servlet</artifactId>
                     </exclusion>
                 </exclusions>
             </dependency>

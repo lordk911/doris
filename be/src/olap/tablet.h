@@ -62,6 +62,8 @@ using TabletSharedPtr = std::shared_ptr<Tablet>;
 
 enum TabletStorageType { STORAGE_TYPE_LOCAL, STORAGE_TYPE_REMOTE, STORAGE_TYPE_REMOTE_AND_LOCAL };
 
+extern const std::chrono::seconds TRACE_TABLET_LOCK_THRESHOLD;
+
 class Tablet : public BaseTablet {
 public:
     static TabletSharedPtr create_tablet_from_meta(TabletMetaSharedPtr tablet_meta,
@@ -380,6 +382,8 @@ public:
     bool check_all_rowset_segment();
 
     void update_max_version_schema(const TabletSchemaSPtr& tablet_schema);
+
+    int64_t get_table_id() { return _tablet_meta->table_id(); }
 
 private:
     Status _init_once_action();

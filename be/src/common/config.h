@@ -35,7 +35,8 @@ CONF_Int32(be_port, "9060");
 // port for brpc
 CONF_Int32(brpc_port, "8060");
 
-// the number of bthreads for brpc, the default value is set to -1, which means the number of bthreads is #cpu-cores
+// the number of bthreads for brpc, the default value is set to -1,
+// which means the number of bthreads is #cpu-cores
 CONF_Int32(brpc_num_threads, "-1");
 
 // port to brpc server for single replica load
@@ -231,6 +232,8 @@ CONF_mInt32(tablet_rowset_stale_sweep_time_sec, "300");
 // garbage sweep policy
 CONF_Int32(max_garbage_sweep_interval, "3600");
 CONF_Int32(min_garbage_sweep_interval, "180");
+// garbage sweep every batch will sleep 1ms
+CONF_mInt32(garbage_sweep_batch_size, "100");
 CONF_mInt32(snapshot_expire_time_sec, "172800");
 // It is only a recommended value. When the disk space is insufficient,
 // the file storage period under trash dose not have to comply with this parameter.
@@ -256,6 +259,7 @@ CONF_Bool(disable_storage_page_cache, "true");
 CONF_Bool(enable_storage_vectorization, "true");
 
 CONF_Bool(enable_low_cardinality_optimize, "true");
+CONF_Bool(enable_low_cardinality_cache_code, "true");
 
 // be policy
 // whether check compaction checksum
@@ -395,8 +399,15 @@ CONF_Int32(single_replica_load_download_num_workers, "64");
 CONF_Int64(load_data_reserve_hours, "4");
 // log error log will be removed after this time
 CONF_mInt64(load_error_log_reserve_hours, "48");
-CONF_Int32(number_tablet_writer_threads, "16");
-CONF_Int32(number_slave_replica_download_threads, "64");
+
+// be brpc interface is classified into two categories: light and heavy
+// each category has diffrent thread number
+// threads to handle heavy api interface, such as transmit_data/transmit_block etc
+CONF_Int32(brpc_heavy_work_pool_threads, "192");
+// threads to handle light api interface, such as exec_plan_fragment_prepare/exec_plan_fragment_start
+CONF_Int32(brpc_light_work_pool_threads, "32");
+CONF_Int32(brpc_heavy_work_pool_max_queue_size, "10240");
+CONF_Int32(brpc_light_work_pool_max_queue_size, "10240");
 
 // The maximum amount of data that can be processed by a stream load
 CONF_mInt64(streaming_load_max_mb, "10240");
@@ -465,7 +476,7 @@ CONF_Int32(min_chunk_reserved_bytes, "1024");
 // of gperftools tcmalloc central lock.
 // Jemalloc or google tcmalloc have core cache, Chunk Allocator may no longer be needed after replacing
 // gperftools tcmalloc.
-CONF_mBool(disable_chunk_allocator_in_vec, "false");
+CONF_mBool(disable_chunk_allocator_in_vec, "true");
 
 // The probing algorithm of partitioned hash table.
 // Enable quadratic probing hash table
@@ -837,7 +848,7 @@ CONF_mInt32(orc_natural_read_size_mb, "8");
 CONF_mInt32(bloom_filter_predicate_check_row_num, "204800");
 
 //whether turn on quick compaction feature
-CONF_Bool(enable_quick_compaction, "false");
+CONF_Bool(enable_quick_compaction, "true");
 // For continuous versions that rows less than quick_compaction_max_rows will  trigger compaction quickly
 CONF_Int32(quick_compaction_max_rows, "1000");
 // min compaction versions
@@ -898,8 +909,6 @@ CONF_Int32(segcompaction_threshold_segment_num, "10");
 // The segment whose row number above the threshold will be compacted during segcompaction
 CONF_Int32(segcompaction_small_threshold, "1048576");
 
-CONF_String(jvm_max_heap_size, "1024M");
-
 // enable java udf and jdbc scannode
 CONF_Bool(enable_java_support, "true");
 
@@ -910,6 +919,12 @@ CONF_Bool(enable_fuzzy_mode, "false");
 CONF_Int32(max_depth_of_expr_tree, "600");
 
 CONF_mBool(enable_stack_trace, "true");
+
+// enable shrink memory, default is false
+CONF_Bool(enable_shrink_memory, "false");
+
+// Allow invalid decimalv2 literal for compatible with old version. Recommend set it false strongly.
+CONF_mBool(allow_invalid_decimalv2_literal, "false");
 
 #ifdef BE_TEST
 // test s3

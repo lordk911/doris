@@ -129,7 +129,7 @@ public class BeLoadRebalancer extends Rebalancer {
             // for each path, we try to select at most BALANCE_SLOT_NUM_FOR_PATH tablets
             Map<Long, Integer> remainingPaths = Maps.newHashMap();
             for (Long pathHash : pathHigh) {
-                remainingPaths.put(pathHash, TabletScheduler.BALANCE_SLOT_NUM_FOR_PATH);
+                remainingPaths.put(pathHash, Config.balance_slot_num_per_path);
             }
 
             if (remainingPaths.isEmpty()) {
@@ -271,7 +271,7 @@ public class BeLoadRebalancer extends Rebalancer {
                 if (lowBackend == null) {
                     continue;
                 }
-                if (hosts.contains(lowBackend.getHost())) {
+                if (!Config.allow_replica_on_same_host && hosts.contains(lowBackend.getHost())) {
                     continue;
                 }
 

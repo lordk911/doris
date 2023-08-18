@@ -72,6 +72,8 @@ public class Config extends ConfigBase {
     @ConfField public static String sys_log_delete_age = "7d";
     @Deprecated
     @ConfField public static String sys_log_roll_mode = "SIZE-MB-1024";
+    @ConfField
+    public static boolean sys_log_enable_compress = false;
 
     /**
      * audit_log_dir:
@@ -114,6 +116,8 @@ public class Config extends ConfigBase {
     @Deprecated
     @ConfField
     public static String audit_log_roll_mode = "TIME-DAY";
+    @ConfField
+    public static boolean audit_log_enable_compress = false;
 
     /**
      * plugin_dir:
@@ -1008,7 +1012,7 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, masterOnly = true)
     public static int storage_high_watermark_usage_percent = 85;
     @ConfField(mutable = true, masterOnly = true)
-    public static long storage_min_left_capacity_bytes = 2 * 1024 * 1024 * 1024; // 2G
+    public static long storage_min_left_capacity_bytes = 2 * 1024 * 1024 * 1024L; // 2G
 
     /**
      * If capacity of disk reach the 'storage_flood_stage_usage_percent' and 'storage_flood_stage_left_capacity_bytes',
@@ -1171,6 +1175,10 @@ public class Config extends ConfigBase {
     // Valid only if use PartitionRebalancer
     @ConfField(mutable = true, masterOnly = true)
     public static int partition_rebalance_max_moves_num_per_selection = 10;
+
+    // 1 slot for reduce unnecessary balance task, provided a more accurate estimate of capacity
+    @ConfField(masterOnly = true, mutable = true)
+    public static int balance_slot_num_per_path = 1;
 
     // This threshold is to avoid piling up too many report task in FE, which may cause OOM exception.
     // In some large Doris cluster, eg: 100 Backends with ten million replicas, a tablet report may cost
@@ -1397,6 +1405,20 @@ public class Config extends ConfigBase {
      */
     @ConfField(mutable = true, masterOnly = true)
     public static boolean recover_with_empty_tablet = false;
+
+    /**
+     * In some scenarios, there is an unrecoverable metadata problem in the cluster,
+     * and the visibleVersion of the data does not match be. In this case, it is still
+     * necessary to restore the remaining data (which may cause problems with the correctness of the data).
+     * This configuration is the same as` recover_with_empty_tablet` should only be used in emergency situations
+     * This configuration has three values:
+     *   disable : If an exception occurs, an error will be reported normally.
+     *   ignore_version: ignore the visibleVersion information recorded in fe partition, use replica version
+     *   ignore_all: In addition to ignore_version, when encountering no queryable replica,
+     *   skip it directly instead of throwing an exception
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static String recover_with_skip_missing_version = "disable";
 
     /**
      * Whether to add a delete sign column when create unique table
@@ -1886,6 +1908,19 @@ public class Config extends ConfigBase {
     @ConfField(mutable = false, masterOnly = false)
     public static long max_hive_partition_cache_num = 100000;
 
+    @ConfField(mutable = false, masterOnly = false)
+    public static long max_hive_table_catch_num = 1000;
+
+    @ConfField(mutable = false, masterOnly = false)
+    public static short max_hive_list_partition_num = -1;
+
+    /**
+     * Max cache loader thread-pool size.
+     * Max thread pool size for loading external meta cache
+     */
+    @ConfField(mutable = false, masterOnly = false)
+    public static int max_external_cache_loader_thread_pool_size = 10;
+
     /**
      * Max cache num of external catalog's file
      * Decrease this value if FE's memory is small
@@ -1952,6 +1987,13 @@ public class Config extends ConfigBase {
     public static boolean enable_func_pushdown = true;
 
     /**
+     * If set to true, doris will try to parse the ddl of a hive view and try to execute the query
+     * otherwise it will throw an AnalysisException.
+     */
+    @ConfField(mutable = true)
+    public static boolean enable_query_hive_views = false;
+
+    /**
      * If set to true, doris will automatically synchronize hms metadata to the cache in fe.
      */
     @ConfField(masterOnly = true)
@@ -2002,5 +2044,8 @@ public class Config extends ConfigBase {
      */
     @ConfField(mutable = true)
     public static boolean infodb_support_ext_catalog = false;
+
+    @ConfField(mutable = true)
+    public static boolean use_mysql_bigint_for_largeint = false;
 }
 

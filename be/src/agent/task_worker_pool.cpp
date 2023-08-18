@@ -602,7 +602,7 @@ void TaskWorkerPool::_push_worker_thread_callback() {
 
             if (index < 0) {
                 // there is no high priority task. notify other thread to handle normal task
-                _worker_thread_condition_variable.notify_one();
+                _worker_thread_condition_variable.notify_all();
                 break;
             }
 
@@ -700,8 +700,8 @@ void TaskWorkerPool::_publish_version_worker_thread_callback() {
                     _tasks.push_back(agent_task_req);
                     _worker_thread_condition_variable.notify_one();
                 }
-                LOG(INFO) << "wait for previous publish version task to be done"
-                          << "transaction_id: " << publish_version_req.transaction_id;
+                LOG_EVERY_SECOND(INFO) << "wait for previous publish version task to be done"
+                                       << "transaction_id: " << publish_version_req.transaction_id;
                 break;
             } else {
                 LOG_WARNING("failed to publish version")

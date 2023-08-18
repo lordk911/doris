@@ -153,6 +153,8 @@ public class EsUtil {
         }
         // remove `dynamic_templates` field
         mappings.remove("dynamic_templates");
+        // remove `dynamic` field
+        mappings.remove("dynamic");
         // check explicit mapping
         if (mappings.isEmpty()) {
             throw new DorisEsException("Do not support index without explicit mapping.");
@@ -301,12 +303,13 @@ public class EsUtil {
             boolean bigIntFlag = false;
             for (String format : formats) {
                 // pre-check format
-                if (!ALLOW_DATE_FORMATS.contains(format)) {
+                String trimFormat = format.trim();
+                if (!ALLOW_DATE_FORMATS.contains(trimFormat)) {
                     column.setComment(
-                            "Elasticsearch type is date, format is " + format + " not support, use String type");
+                            "Elasticsearch type is date, format is " + trimFormat + " not support, use String type");
                     return ScalarType.createStringType();
                 }
-                switch (format) {
+                switch (trimFormat) {
                     case "yyyy-MM-dd HH:mm:ss":
                         dateTimeFlag = true;
                         break;

@@ -413,7 +413,8 @@ void StorageEngine::_compaction_tasks_producer_callback() {
 
     int64_t interval = config::generate_compaction_tasks_min_interval_ms;
     do {
-        if (!config::disable_auto_compaction) {
+        if (!config::disable_auto_compaction &&
+            !MemInfo::is_exceed_soft_mem_limit(GB_EXCHANGE_BYTE)) {
             _adjust_compaction_thread_num();
 
             bool check_score = false;
@@ -764,11 +765,21 @@ void StorageEngine::_cooldown_tasks_producer_callback() {
 }
 
 void StorageEngine::_cache_file_cleaner_tasks_producer_callback() {
-    int64_t interval = config::generate_cache_cleaner_task_interval_sec;
-    do {
+    while (true) {
+        int64_t interval = config::generate_cache_cleaner_task_interval_sec;
+        if (interval <= 0) {
+            interval = 10;
+        }
+        bool stop = _stop_background_threads_latch.wait_for(std::chrono::seconds(interval));
+        if (stop) {
+            break;
+        }
+        if (config::generate_cache_cleaner_task_interval_sec <= 0) {
+            continue;
+        }
         LOG(INFO) << "Begin to Clean cache files";
         FileCacheManager::instance()->gc_file_caches();
-    } while (!_stop_background_threads_latch.wait_for(std::chrono::seconds(interval)));
+    }
 }
 
 } // namespace doris

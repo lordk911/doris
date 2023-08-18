@@ -27,6 +27,7 @@ import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.FunctionSet;
 import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
@@ -650,6 +651,11 @@ public class SelectStmt extends QueryStmt {
             } else {
                 whereClause = new BoolLiteral(true);
             }
+        } else if (whereClause instanceof CaseExpr
+                && (((CaseExpr) whereClause).getChild(1) instanceof IntLiteral)
+                && (((CaseExpr) whereClause).getChild(2) instanceof IntLiteral)) {
+            whereClause = new CastExpr(TypeDef.create(PrimitiveType.BOOLEAN), whereClause);
+            whereClause.setType(Type.BOOLEAN);
         }
     }
 
@@ -1127,6 +1133,16 @@ public class SelectStmt extends QueryStmt {
             }
         }
 
+        // can't contain analytic exprs
+        ArrayList<Expr> aggExprsForChecking = Lists.newArrayList();
+        TreeNode.collect(resultExprs, Expr.isAggregatePredicate(), aggExprsForChecking);
+        ArrayList<Expr> analyticExprs = Lists.newArrayList();
+        TreeNode.collect(aggExprsForChecking, AnalyticExpr.class, analyticExprs);
+        if (!analyticExprs.isEmpty()) {
+            throw new AnalysisException(
+                "AGGREGATE clause must not contain analytic expressions");
+        }
+
         // Collect the aggregate expressions from the SELECT, HAVING and ORDER BY clauses
         // of this statement.
         ArrayList<FunctionCallExpr> aggExprs = Lists.newArrayList();
@@ -1155,9 +1171,17 @@ public class SelectStmt extends QueryStmt {
         countAllMap = ExprSubstitutionMap.compose(multiDistinctAggMap, countAllMap, analyzer);
         List<Expr> substitutedAggs =
                 Expr.substituteList(aggExprs, countAllMap, analyzer, false);
-        // the resultExprs must substitute in the same way as aggExprs
-        // then resultExprs can be substitute correctly using combinedSmap
+        // the resultExprs and havingClause must substitute in the same way as aggExprs
+        // then resultExprs and havingClause can be substitute correctly using combinedSmap
         resultExprs = Expr.substituteList(resultExprs, countAllMap, analyzer, false);
+        if (havingClauseAfterAnaylzed != null) {
+            havingClauseAfterAnaylzed =
+                    havingClauseAfterAnaylzed.substitute(countAllMap, analyzer, false);
+        }
+        if (sortInfo != null) {
+            // the ordering exprs must substitute in the same way as resultExprs
+            sortInfo.substituteOrderingExprs(countAllMap, analyzer);
+        }
         aggExprs.clear();
         TreeNode.collect(substitutedAggs, Expr.isAggregatePredicate(), aggExprs);
 
@@ -1174,6 +1198,8 @@ public class SelectStmt extends QueryStmt {
                 aliasFirst = analyzer.getContext().getSessionVariable().isGroupByAndHavingUseAliasFirst();
             }
             substituteOrdinalsAliases(groupingExprs, "GROUP BY", analyzer, aliasFirst);
+            // the groupingExprs must substitute in the same way as resultExprs
+            groupingExprs = Expr.substituteList(groupingExprs, countAllMap, analyzer, false);
 
             if (!groupByClause.isGroupByExtension() && !groupingExprs.isEmpty()) {
                 /*

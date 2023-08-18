@@ -260,6 +260,10 @@ public abstract class Type {
         return isScalarType(PrimitiveType.BOOLEAN);
     }
 
+    public boolean isTinyint() {
+        return isScalarType(PrimitiveType.TINYINT);
+    }
+
     public boolean isDecimalV2() {
         return isScalarType(PrimitiveType.DECIMALV2);
     }
@@ -939,6 +943,23 @@ public abstract class Type {
             default:
                 return null;
         }
+    }
+
+    public boolean isDecimalV3OrContainsDecimalV3() {
+        if (isDecimalV3()) {
+            return true;
+        } else if (isStructType()) {
+            for (StructField field : ((StructType) this).getFields()) {
+                if (field.getType().isDecimalV3()) {
+                    return true;
+                }
+            }
+        } else if (isMapType()) {
+            return ((MapType) this).getKeyType().isDecimalV3() || ((MapType) this).getValueType().isDecimalV3();
+        } else if (isArrayType()) {
+            return ((ArrayType) this).getItemType().isDecimalV3();
+        }
+        return false;
     }
 
     /**

@@ -58,8 +58,9 @@ VJoinNodeBase::VJoinNodeBase(ObjectPool* pool, const TPlanNode& tnode, const Des
     _init_join_op();
     if (_is_mark_join) {
         DCHECK(_join_op == TJoinOp::LEFT_ANTI_JOIN || _join_op == TJoinOp::LEFT_SEMI_JOIN ||
-               _join_op == TJoinOp::CROSS_JOIN)
-                << "Mark join is only supported for left semi/anti join and cross join but this is "
+               _join_op == TJoinOp::CROSS_JOIN || _join_op == TJoinOp::NULL_AWARE_LEFT_ANTI_JOIN)
+                << "Mark join is only supported for null aware left semi/anti join and cross join "
+                   "but this is "
                 << _join_op;
     }
     if (tnode.__isset.hash_join_node) {
@@ -137,6 +138,11 @@ Status VJoinNodeBase::_build_output_block(Block* origin_block, Block* output_blo
                 RETURN_IF_ERROR(_output_expr_ctxs[i]->execute(origin_block, &result_column_id));
                 auto column_ptr = origin_block->get_by_position(result_column_id)
                                           .column->convert_to_full_column_if_const();
+                // check nullable here, and print more info about plan
+                if (!mutable_columns[i]->is_nullable() && column_ptr->is_nullable()) {
+                    LOG(FATAL) << "to is not nullable while from is nullable, could not copy. i = "
+                               << i << ", exec_node_id = " << _id;
+                }
                 insert_column_datas(mutable_columns[i], *column_ptr, rows);
             }
         }

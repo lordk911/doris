@@ -75,6 +75,13 @@ public class FileSystemManager {
     private static final String BOS_SCHEME = "bos";
     private static final String JFS_SCHEME = "jfs";
     private static final String AFS_SCHEME = "afs";
+    private static final String GFS_SCHEME = "gfs";
+
+    private static final String GCS_SCHEME = "gs";
+    
+    private static final String FS_PREFIX = "fs.";
+    
+    private static final String GCS_PROJECT_ID_KEY = "fs.gs.project.id";
 
     private static final String USER_NAME_KEY = "username";
     private static final String PASSWORD_KEY = "password";
@@ -221,7 +228,11 @@ public class FileSystemManager {
             brokerFileSystem = getBOSFileSystem(path, properties);
         } else if (scheme.equals(JFS_SCHEME)) {
             brokerFileSystem = getJuiceFileSystem(path, properties);
-        }else {
+        } else if (scheme.equals(GFS_SCHEME)) {
+            brokerFileSystem = getGooseFSFileSystem(path, properties);
+        } else if (scheme.equals(GCS_SCHEME)) {
+            brokerFileSystem = getGCSFileSystem(path, properties);
+        } else {
             throw new BrokerException(TBrokerOperationStatusCode.INVALID_INPUT_FILE_PATH,
                 "invalid path. scheme is not supported");
         }
@@ -472,6 +483,44 @@ public class FileSystemManager {
         }
     }
 
+    /**
+     *  get GCS file system
+     * @param path gcs path
+     * @param properties See {@link https://github.com/GoogleCloudDataproc/hadoop-connectors/blob/branch-2.2.x/gcs/CONFIGURATION.md)}
+     * @return GcsBrokerFileSystem
+     */
+    public BrokerFileSystem getGCSFileSystem(String path, Map<String, String> properties) {
+        WildcardURI pathUri = new WildcardURI(path);
+        String projectId = properties.get(GCS_PROJECT_ID_KEY);
+        if (Strings.isNullOrEmpty(projectId)) {
+            throw new BrokerException(TBrokerOperationStatusCode.INVALID_ARGUMENT,
+                    "missed fs.gs.project.id configuration");
+        }
+        String ugi = "";
+        FileSystemIdentity fileSystemIdentity = new FileSystemIdentity(projectId, ugi);
+        BrokerFileSystem fileSystem = updateCachedFileSystem(fileSystemIdentity, properties);
+        fileSystem.getLock().lock();
+        try {
+            if (fileSystem.getDFSFileSystem() == null) {
+                logger.info("create file system for new path " + path);
+                // create a new filesystem
+                Configuration conf = new Configuration();
+                properties.forEach((k, v) -> {
+                    if (Strings.isNullOrEmpty(v) && k.startsWith("fs.")) {
+                        conf.set(k, v);
+                    }
+                });
+                FileSystem gcsFileSystem = FileSystem.get(pathUri.getUri(), conf);
+                fileSystem.setFileSystem(gcsFileSystem);
+            }
+            return fileSystem;
+        } catch (Exception e) {
+            logger.error("errors while connect to " + path, e);
+            throw new BrokerException(TBrokerOperationStatusCode.NOT_AUTHORIZED, e);
+        } finally {
+            fileSystem.getLock().unlock();
+        }
+    }
 
     /**
      * file system handle is cached, the identity is endpoint + bucket + accessKey_secretKey
@@ -970,6 +1019,44 @@ public class FileSystemManager {
             throw new BrokerException(TBrokerOperationStatusCode.NOT_AUTHORIZED, e, e.getMessage());
         } finally {
             fileSystem.getLock().unlock();
+        }
+    }
+
+    /**
+     * @param path
+     * @param properties
+     * @return
+     * @throws URISyntaxException
+     * @throws Exception
+     */
+    public BrokerFileSystem getGooseFSFileSystem(String path, Map<String, String> properties) {
+        WildcardURI pathUri = new WildcardURI(path);
+        // endpoint is the server host, pathUri.getUri().getHost() is the bucket
+        // we should use these two params as the host identity, because FileSystem will cache both.
+        String host = GFS_SCHEME + "://" + pathUri.getAuthority();
+
+        String username = properties.getOrDefault(USER_NAME_KEY, "");
+        String password = properties.getOrDefault(PASSWORD_KEY, "");
+        String gfsUgi = username + "," + password;
+        FileSystemIdentity fileSystemIdentity = new FileSystemIdentity(host, gfsUgi);
+        BrokerFileSystem brokerFileSystem = updateCachedFileSystem(fileSystemIdentity, properties);
+        brokerFileSystem.getLock().lock();
+        try {
+            if (brokerFileSystem.getDFSFileSystem() == null) {
+                logger.info("create goosefs client: " + path);
+                Configuration conf = new Configuration();
+                for (Map.Entry<String, String> propElement : properties.entrySet()) {
+                    conf.set(propElement.getKey(), propElement.getValue());
+                }
+                FileSystem fileSystem = FileSystem.get(pathUri.getUri(), conf);
+                brokerFileSystem.setFileSystem(fileSystem);
+            }
+            return brokerFileSystem;
+        } catch (Exception e) {
+            logger.error("errors while connect to " + path, e);
+            throw new BrokerException(TBrokerOperationStatusCode.NOT_AUTHORIZED, e);
+        } finally {
+            brokerFileSystem.getLock().unlock();
         }
     }
 

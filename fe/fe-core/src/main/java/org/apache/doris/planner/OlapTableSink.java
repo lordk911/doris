@@ -62,7 +62,6 @@ import org.apache.doris.thrift.TPaloNodesInfo;
 import org.apache.doris.thrift.TStorageFormat;
 import org.apache.doris.thrift.TTabletLocation;
 import org.apache.doris.thrift.TUniqueId;
-import org.apache.doris.transaction.DatabaseTransactionMgr;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.HashMultimap;
@@ -209,7 +208,7 @@ public class OlapTableSink extends DataSink {
             MaterializedIndexMeta indexMeta = pair.getValue();
             List<String> columns = Lists.newArrayList();
             List<TColumn> columnsDesc = Lists.newArrayList();
-            columns.addAll(indexMeta.getSchema().stream().map(Column::getName).collect(Collectors.toList()));
+            columns.addAll(indexMeta.getSchema().stream().map(Column::getNonShadowName).collect(Collectors.toList()));
             for (Column column : indexMeta.getSchema()) {
                 TColumn tColumn = column.toThrift();
                 column.setIndexFlag(tColumn, table);
@@ -347,7 +346,6 @@ public class OlapTableSink extends DataSink {
         TOlapTableLocationParam slaveLocationParam = new TOlapTableLocationParam();
         // BE id -> path hash
         Multimap<Long, Long> allBePathsMap = HashMultimap.create();
-        int replicaNum = 0;
         for (Long partitionId : partitionIds) {
             Partition partition = table.getPartition(partitionId);
             int quorum = table.getPartitionInfo().getReplicaAllocation(partition.getId()).getTotalReplicaNum() / 2 + 1;
@@ -377,7 +375,6 @@ public class OlapTableSink extends DataSink {
                                 Lists.newArrayList(bePathsMap.keySet())));
                     }
                     allBePathsMap.putAll(bePathsMap);
-                    replicaNum += bePathsMap.size();
                 }
             }
         }
@@ -387,14 +384,6 @@ public class OlapTableSink extends DataSink {
         Status st = Env.getCurrentSystemInfo().checkExceedDiskCapacityLimit(allBePathsMap, true);
         if (!st.ok()) {
             throw new DdlException(st.getErrorMsg());
-        }
-        long dbId = tDataSink.getOlapTableSink().getDbId();
-        long txnId = tDataSink.getOlapTableSink().getTxnId();
-        try {
-            DatabaseTransactionMgr mgr = Env.getCurrentGlobalTransactionMgr().getDatabaseTransactionMgr(dbId);
-            mgr.registerTxnReplicas(txnId, replicaNum);
-        } catch (Exception e) {
-            LOG.error("register txn replica failed, txnId={}, dbId={}", txnId, dbId);
         }
         return Arrays.asList(locationParam, slaveLocationParam);
     }

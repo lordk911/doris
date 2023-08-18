@@ -1046,8 +1046,8 @@ public class Coordinator {
 
                 // when left table is empty, it's bucketset is empty.
                 // set right table destination address to the address of left table
-                if (destParams.instanceExecParams.size() == 1
-                        && destParams.instanceExecParams.get(0).bucketSeqSet.isEmpty()) {
+                if (destParams.instanceExecParams.size() == 1 && (bucketNum == 0
+                        || destParams.instanceExecParams.get(0).bucketSeqSet.isEmpty())) {
                     bucketNum = 1;
                     destParams.instanceExecParams.get(0).bucketSeqSet.add(0);
                 }
@@ -1260,6 +1260,10 @@ public class Coordinator {
                 int exchangeInstances = -1;
                 if (ConnectContext.get() != null && ConnectContext.get().getSessionVariable() != null) {
                     exchangeInstances = ConnectContext.get().getSessionVariable().getExchangeInstanceParallel();
+                }
+                // when we use nested loop join do right outer / semi / anti join, the instance must be 1.
+                if (leftMostNode.getNumInstances() == 1) {
+                    exchangeInstances = 1;
                 }
                 if (exchangeInstances > 0 && fragmentExecParamsMap.get(inputFragmentId)
                         .instanceExecParams.size() > exchangeInstances) {

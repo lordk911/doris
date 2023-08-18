@@ -48,6 +48,7 @@ import org.apache.doris.catalog.PartitionType;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.UserException;
@@ -633,6 +634,20 @@ public class OlapScanNode extends ScanNode {
         }
         for (Tablet tablet : tablets) {
             long tabletId = tablet.getId();
+            if (!Config.recover_with_skip_missing_version.equalsIgnoreCase("disable")) {
+                long tabletVersion = -1L;
+                for (Replica replica : tablet.getReplicas()) {
+                    if (replica.getVersion() > tabletVersion) {
+                        tabletVersion = replica.getVersion();
+                    }
+                }
+                if (tabletVersion != visibleVersion) {
+                    LOG.warn("tablet {} version {} is not equal to partition {} version {}",
+                            tabletId, tabletVersion, partition.getId(), visibleVersion);
+                    visibleVersion = tabletVersion;
+                    visibleVersionStr = String.valueOf(visibleVersion);
+                }
+            }
             TScanRangeLocations scanRangeLocations = new TScanRangeLocations();
             TPaloScanRange paloRange = new TPaloScanRange();
             paloRange.setDbName("");
@@ -708,7 +723,12 @@ public class OlapScanNode extends ScanNode {
                 scanBackendIds.add(backend.getId());
             }
             if (tabletIsNull) {
-                throw new UserException(tabletId + " have no queryable replicas. err: " + Joiner.on(", ").join(errs));
+                if (Config.recover_with_skip_missing_version.equalsIgnoreCase("ignore_all")) {
+                    continue;
+                } else {
+                    throw new UserException(tabletId + " have no queryable replicas. err: "
+                            + Joiner.on(", ").join(errs));
+                }
             }
             TScanRange scanRange = new TScanRange();
             scanRange.setPaloScanRange(paloRange);
@@ -908,6 +928,16 @@ public class OlapScanNode extends ScanNode {
      * Check Parent sort node can push down to child olap scan.
      */
     public boolean checkPushSort(SortNode sortNode) {
+        if (!olapTable.isDupKeysOrMergeOnWrite()) {
+            return false;
+        }
+
+        // Ensure limit is less then threshold
+        if (sortNode.getLimit() <= 0
+                || sortNode.getLimit() > ConnectContext.get().getSessionVariable().topnOptLimitThreshold) {
+            return false;
+        }
+
         // Ensure all isAscOrder is same, ande length != 0.
         // Can't be zorder.
         if (sortNode.getSortInfo().getIsAscOrder().stream().distinct().count() != 1
@@ -922,6 +952,8 @@ public class OlapScanNode extends ScanNode {
         // sort key: (a) (a,b) (a,b,c) (a,b,c,d) is ok
         //           (a,c) (a,c,d), (a,c,b) (a,c,f) (a,b,c,d,e)is NOT ok
         List<Expr> sortExprs = sortNode.getSortInfo().getMaterializedOrderingExprs();
+        List<Boolean> nullsFirsts = sortNode.getSortInfo().getNullsFirst();
+        List<Boolean> isAscOrders = sortNode.getSortInfo().getIsAscOrder();
         if (sortExprs.size() > olapTable.getDataSortInfo().getColNum()) {
             return false;
         }
@@ -930,7 +962,18 @@ public class OlapScanNode extends ScanNode {
             Column tableKey = olapTable.getFullSchema().get(i);
             // sort slot.
             Expr sortExpr = sortExprs.get(i);
-            if (!(sortExpr instanceof SlotRef) || !tableKey.equals(((SlotRef) sortExpr).getColumn())) {
+            if (sortExpr instanceof SlotRef) {
+                SlotRef slotRef = (SlotRef) sortExpr;
+                if (tableKey.equals(slotRef.getColumn())) {
+                    // ORDER BY DESC NULLS FIRST can not be optimized to only read file tail,
+                    // since NULLS is at file head but data is at tail
+                    if (tableKey.isAllowNull() && nullsFirsts.get(i) && !isAscOrders.get(i)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            } else {
                 return false;
             }
         }
